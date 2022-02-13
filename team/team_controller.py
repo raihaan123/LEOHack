@@ -21,7 +21,7 @@ from RL import RL_Model
 # Specifically, init, run, and reset
 
 class SatelliteSystem(Environment):
-    def __init__(self, state_space, action_space):
+    def __init__(self):
         super().__init__()
         self.state = np.zeros(6)
         self.action = np.zeros(3)
@@ -82,13 +82,14 @@ class TeamController(SatControllerInterface):
 
         self.has_docked     = False
 
-        # # Initialize RL environment wrapper, agent and model
-        # self.RL_satellite = Environment.create(
-        #     environment=SatelliteSystem, max_episode_timesteps=500
-        # )
+        # Initialize RL environment wrapper, agent and model
+        self.RL_satellite = Environment.create(
+            environment=SatelliteSystem,
+            max_episode_timesteps=500
+        )
 
 
-        # self.RL_model = RL_Model(self.RL_satellite)
+        self.RL_model = RL_Model(self.RL_satellite)
 
 
         
@@ -202,28 +203,24 @@ class TeamController(SatControllerInterface):
         else:                                                                   
             theta_check = False
 
-        # Add error vector as a row to the self.errors matrix
+
         self.errors = np.vstack((self.errors, error))
-        # Same with actions
         self.actions = np.vstack((self.actions, control_actions))
 
-        # Final post-docking processing
-        if pose_check and theta_check:      
-            print(pose_check, theta_check)
-            self.has_docked = True
+        # # Final post-docking processing
+        # if pose_check and theta_check:      
+        #     print(pose_check, theta_check)
+        #     self.has_docked = True
 
+        if self.counter % 100 == 0:
             # Matplotlib to plot vy errors vs x errors - both located in self.errors
             state_space(self.errors)
-
 
 
         self.prev_time = self.elapsed_time
 
         return control
     
-
-    
-
 
 
     def team_reset(self) -> None:
