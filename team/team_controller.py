@@ -24,10 +24,10 @@ from tensorforce.execution import Runner
 class SatelliteSystem(Environment):
     def __init__(self):
         super().__init__()
-        self.state = np.zeros(6)
-        self.action = np.zeros(3)
-        self.terminal = False
-        self.reward = 0
+        self.state      = np.zeros(6)
+        self.action     = np.zeros(3)
+        self.terminal   = False
+        self.reward     = 0
 
         # Create a thrust command message
         self.control = sat_msgs.ControlMessage()
@@ -52,14 +52,18 @@ class SatelliteSystem(Environment):
 
 
     # Defining the reward function
-    def execute(self, errors):
+    def execute(self, actions):
+        control = self.control
+        [control.thrust.f_x, control.thrust.f_y, control.thrust.tau] = actions
+
+        errors = error_func()
 
         # Reward function - norm of the error
         reward = np.linalg.norm(errors)
         return self.state,False,reward
 
 
-class RL_Model:
+class RL_Model():
     def __init__(self, env):
         self.env = env
 
@@ -79,9 +83,9 @@ class RL_Model:
         )
     
     def start(self):
-        runner.run(num_episodes=200)
-        runner.run(num_episodes=100, evaluation=True)
-        runner.close()
+        self.runner.run(num_episodes=200)
+        self.runner.run(num_episodes=100, evaluation=True)
+        self.runner.close()
 
 
 
@@ -109,7 +113,7 @@ class TeamController(SatControllerInterface):
         # Initialize RL environment wrapper, agent and model
         self.RL_satellite = Environment.create(
             environment=SatelliteSystem,
-            max_episode_timesteps=500
+            max_episode_timesteps=5000
         )
 
         self.RL_model = RL_Model(self.RL_satellite)
@@ -226,25 +230,29 @@ class TeamController(SatControllerInterface):
             environment = self.RL_model.env
             agent       = self.RL_model.agent
 
+            self.RL_model.start()
+
             # Agent identifies action from state
-            actions = agent.act(states=errors, independent=True, deterministic=True)
+            actions = agent.act(states=errors, independent=True)
 
             # Janky way to calculate reward
             # print("!!!!!!!!!!!!!!!!!", self.compute_errors(), satellite_state.fuel)
-            a,b,c = environment.execute(actions)
-            reward = -np.linalg.norm(self.compute_errors())
+            # a,b,c = environment.execute(actions)
+            # reward = -np.linalg.norm(self.compute_errors())
 
-            # Update the agentname
-            agent.observe(terminal=False, reward=reward)
+            # # Update the agentname
+            # agent.observe(terminal=False, reward=reward)
 
-            # Aggregate the rewards
-            self.total_reward += reward
+            # # Aggregate the rewards
+            # self.total_reward += reward
 
-            # Save model every 1000 steps
-            if self.counter % 1000 == 0:
-                agent.save_model(agent_weights)
-                self.logger.info(f'Saved model at step {self.counter}')
-                self.logger.info(f'Total Reward: {self.reward}')
+            # # Save model every 1000 steps
+            # if self.counter % 1000 == 0:
+            #     agent.save_model(agent_weights)
+            #     self.logger.info(f'Saved model at step {self.counter}')
+            #     self.logger.info(f'Total Reward: {self.reward}')
+            #     # reset the environment
+            #     environment.reset()
 
 
 ## ======================================================================

@@ -109,6 +109,8 @@ class Sim():
         # Reload team controller module
         importlib.reload(team_controller)
         self.sat_controller = team_controller.TeamController()
+        ## MOD
+        self.RL = team_controller.RL_model()
 
         self.logger.debug("Reloaded team controller")
 
@@ -147,6 +149,9 @@ class Sim():
 
             # Run team controller
             thrust_command = self.sat_controller.run(self.system_state, self.sat_state, self.dead_sat_state)
+
+            ### MOD!!!!!!!!!! Run RL controller instead
+            #thrust_command = self.RL.run(self.system_state, self.sat_state, self.dead_sat_state)
 
             if(thrust_command == None):
                 self.logger.error("Error encountered in team controller")
