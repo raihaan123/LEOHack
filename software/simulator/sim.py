@@ -183,7 +183,7 @@ class Sim():
             self.sim_thread_lock.release()
 
             # Wait amount of time
-            time.sleep(self.dt)
+            time.sleep(0.1*self.dt)
 
         self.logger.info("Simulation ended")
 

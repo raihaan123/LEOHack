@@ -1,6 +1,6 @@
 # =================================================================
 # Controller choice --> 'PID', 'RL'
-controller_choice   = 'PID'
+controller_choice   = 'RL'
 training            = True
 agent_path          = 'agent_model'
 # =================================================================
@@ -20,14 +20,12 @@ from tensorforce.agents import Agent
 from tensorforce.execution import Runner
 
 
-# RL Environment Wrapper - interacts with the Sim object
+# RL Environment Wrapper - interacts with the simulation api
 class SatelliteSystem(Environment):
     def __init__(self):
         super().__init__()
         self.state = np.zeros(6)
         self.action = np.zeros(3)
-        self.time = 0
-        self.fuel = 0
         self.terminal = False
         self.reward = 0
 
@@ -45,19 +43,20 @@ class SatelliteSystem(Environment):
     def close(self):
         super().close()
 
-    def reset(self, init_state=np.random.random(size=(6,))):
+    def reset(self, init_state):
         self.state = init_state
         self.time = 0
         self.fuel = 0
         self.reward = 0
         return self.state
 
-    def execute(self, state, actions):
-        self.state = state
-        self.action = actions
 
-        self.reward = 0.1 * self.time + 0.9 * self.fuel
-        return self.state, self.terminal, self.reward
+    # Defining the reward function
+    def rewarder(self, errors, fuel):
+
+        # Reward function - norm of the error
+        reward = np.linalg.norm(errors)
+        return reward
 
 
 class RL_Model:
@@ -73,13 +72,12 @@ class RL_Model:
         except:
             print('No previous model found!')
 
-
+        # Probably not gonna use standard runner
         self.runner = Runner(
             agent=agent,
             environment=env
         )
     
-    # Probably not gonna use standard runner
     def start(self):
         runner.run(num_episodes=200)
         runner.run(num_episodes=100, evaluation=True)
@@ -92,15 +90,8 @@ class TeamController(SatControllerInterface):
 
     def team_init(self):
         """ Runs any team based initialization """
-        # Run any initialization you need
 
-        # Example of persistant data
         self.counter = 0
-
-        # Example of logging
-        self.logger.info("Initialized :)")
-        self.logger.warning("Warning...")
-        self.logger.error("Error!")
 
         # Update team info
         team_info = sat_msgs.TeamInfo()
@@ -122,6 +113,7 @@ class TeamController(SatControllerInterface):
         )
 
         self.RL_model = RL_Model(self.RL_satellite)
+        self.total_reward = 0
 
 
         # ====================== PID Controller ===========================
@@ -144,20 +136,12 @@ class TeamController(SatControllerInterface):
 
         # Return team info
         return team_info
-        
+    
 
-    def team_run(self, system_state, satellite_state, dead_sat_state):
-        """ Takes in a system state, satellite states """
-
-        # Get timedelta from elapsed time
-        self.elapsed_time = system_state.elapsedTime.ToTimedelta()
-        self.logger.info(f'Elapsed time: {self.elapsed_time}')
-
-        self.counter += 1
-        self.logger.info(f'Counter value: {self.counter}')
-
-        # Access controller api through RL agent lol
-        control = self.RL_model.env.control
+    def compute_errors(self):
+        dead_sat_state  = self.dead_sat_state
+        system_state    = self.system_state
+        satellite_state = self.satellite_state
 
         # Dead satellite state
         dead_x          = dead_sat_state.pose.x
@@ -201,67 +185,76 @@ class TeamController(SatControllerInterface):
                          f' x_error = {x_error},         y_error = {y_error}'
                          f' vx_error = {vx_error},       vy_error = {vy_error}')
 
-        errors = np.array([x_error, y_error, theta_error, vx_error, vy_error, omega_error])
+        # Concantenate errors
+        return np.array([x_error, y_error, theta_error, vx_error, vy_error, omega_error])
+        
 
-        # Controller switch
+    def team_run(self, system_state, satellite_state, dead_sat_state):
+        """ Takes in a system state, satellite states """
+
+        # For computing errors later
+        self.system_state    = system_state
+        self.satellite_state = satellite_state
+        self.dead_sat_state  = dead_sat_state
+
+        # Get timedelta from elapsed time
+        self.elapsed_time = system_state.elapsedTime.ToTimedelta()
+        self.logger.info(f'Elapsed time: {self.elapsed_time}')
+
+        self.counter += 1
+        self.logger.info(f'Counter value: {self.counter}')
+
+        # Access controller api through RL agent lol
+        control = self.RL_model.env.control
+
+        # Compute errors
+        errors = self.compute_errors()
+
+## ====================== Controller Switch ===========================
+
+
         if controller_choice == 'PID':
-            control_actions = self.PID_controller.step(e = errors, delta_t = self.dt)
+            actions = self.PID_controller.step(e = errors, delta_t = self.dt)
+
+            # Applying the control actions
+            [control.thrust.f_x, control.thrust.f_y, control.thrust.tau] = actions
+
 
         elif controller_choice == 'RL':
-            # If using RL, run this
-            self.RL_state = errors
+            environment = self.RL_model.env
+            agent       = self.RL_model.agent
 
             # Agent identifies action from state
-            actions = agent.act(states=errors)
+            actions = agent.act(states=errors, independent=True, deterministic=True)
 
-            # Updated state and reward returned by environment
-            states, terminal, reward = environment.execute(actions=actions)
+            # Janky way to calculate reward
+            reward = environment.rewarder(self.compute_errors(), satellite_state.fuel)
 
             # Update the agent
-            agent.observe(terminal=terminal, reward=reward)
+            agent.observe(terminal=False, reward=reward)
+
+            # Aggregate the rewards
+            self.total_reward += reward
 
             # Save model every 1000 steps
             if self.counter % 1000 == 0:
                 agent.save_model(agent_weights)
+                self.logger.info(f'Saved model at step {self.counter}')
+                self.logger.info(f'Total Reward: {self.reward}')
 
 
+## ======================================================================
 
-
-
-
-
-
+        # Adding to histories
+        self.errors = np.vstack((self.errors, errors))
+        self.actions = np.vstack((self.actions, actions))
 
         # More verbosey stuff!
-        print(f"Control action = {control_actions}")
+        print(f"Control action = {actions}")
 
-        # Applying the control actions
-        [control.thrust.f_x, control.thrust.f_y, control.thrust.tau] = control_actions
-        
-        # Flags
-        pose_check      = False
-        theta_check     = False
-
-        # Check position tolerance
-        if abs(x_error) < x_tolerance and abs(y_error) < y_tolerance:           
-            pose_check = True
-        else:                                                                   
-            pose_check = False
-
-        # Check angular tolerance
-        if abs(theta_error) < theta_tolerance and abs(omega_error) < omega_tolerance:     
-            theta_check = True
-        else:                                                                   
-            theta_check = False
-
-
-        self.errors = np.vstack((self.errors, errors))
-        self.actions = np.vstack((self.actions, control_actions))
-
+        # Matplotlib to plot phase portraits on every 100th step
         if self.counter % 100 == 0:
-            # Matplotlib to plot vy errors vs x errors - both located in self.errors
             state_space(self.errors)
-
 
         self.prev_time = self.elapsed_time
 
