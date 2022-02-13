@@ -1,3 +1,7 @@
+## Controller choice --> 'PID', 'RL'
+controller_choice = 'PID'
+
+
 from sat_controller import SatControllerInterface, sat_msgs
 from datetime import datetime, timedelta
 import numpy as np
@@ -7,7 +11,8 @@ from pid import PID
 from plotter import state_space
 import sys
 
-from RL import RL_Model, SatelliteSystem
+from tensorforce import Environment
+from RL import RL_Model
 
 # Team code is written as an implementation of various methods
 # within the the generic SatControllerInterface class.
@@ -15,8 +20,42 @@ from RL import RL_Model, SatelliteSystem
 
 # Specifically, init, run, and reset
 
-class TeamController(SatControllerInterface):
+class SatelliteSystem(Environment):
+    def __init__(self, state_space, action_space):
+        super().__init__()
+        self.state = np.zeros(6)
+        self.action = np.zeros(3)
+        self.time = 0
+        self.fuel = 0
+        self.terminal = False
+        self.reward = 0
 
+    def states(self):
+        return dict(type='float', shape=(6,))
+
+    def actions(self):
+        return dict(type='float', shape=3)
+
+    def close(self):
+        super().close()
+
+    def reset(self, init_state=np.random.random(size=(6,))):
+        self.state = init_state
+        self.time = 0
+        self.fuel = 0
+        self.reward = 0
+        return self.state
+
+    def execute(self, state, actions):
+        self.state = state
+        self.action = actions
+        self.time += 1
+        self.fuel -= 0.1
+        self.reward = 0.1 * self.time + 0.9 * self.fuel
+        return self.state, self.terminal, self.reward
+
+
+class TeamController(SatControllerInterface):
 
     """ Team control code """
 
@@ -43,9 +82,13 @@ class TeamController(SatControllerInterface):
 
         self.has_docked     = False
 
-        # Initialize RL model
-        self.RL_satellite = SatelliteSystem()
-        self.RL_model = RL_Model(self.RL_satellite)
+        # # Initialize RL environment wrapper, agent and model
+        # self.RL_satellite = Environment.create(
+        #     environment=SatelliteSystem, max_episode_timesteps=500
+        # )
+
+
+        # self.RL_model = RL_Model(self.RL_satellite)
 
 
         
@@ -62,7 +105,6 @@ class TeamController(SatControllerInterface):
                                 "antiwindup": False, "max_error_integral": 1.0}
 
         self.controller = PID(pid_params)
-
 
         self.dt = 0.05
 
@@ -126,7 +168,14 @@ class TeamController(SatControllerInterface):
                          f' vx_error = {vx_error},       vy_error = {vy_error}')
 
         error = np.array([x_error, y_error, theta_error, vx_error, vy_error, omega_error])
-        control_actions = self.controller.step(e = error, delta_t = self.dt)
+
+        # If using PID, run this
+        if controller_choice == 'PID':
+            control_actions = self.controller.step(e = error, delta_t = self.dt)
+
+        else:
+            # If using RL, run this
+            control_actions = self.RL_model.step(error, self.elapsed_time)
 
         # More verbosey stuff!
         print(f"control action = {control_actions}")

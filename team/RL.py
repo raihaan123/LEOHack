@@ -1,6 +1,7 @@
 from tensorforce.environments import Environment
 from tensorforce.agents import Agent
 from tensorforce.execution import Runner
+import numpy as np
 
 
 # Reference - https://tensorforce.readthedocs.io/en/latest/basics/getting-started.html
@@ -38,7 +39,7 @@ class SatelliteSystem(Environment):
         return state
 
 
-    def execute(self, actions):
+    def execute(self, state, actions):
         next_state = np.random.random(size=(6,))
         terminal = False  # Always False if no "natural" terminal state
         reward = np.random.random()
@@ -48,13 +49,6 @@ class SatelliteSystem(Environment):
 
 class RL_Model:
     def __init__(self, env):
-        None
-    
-    def start:
-        # environment = Environment.create(
-        #     environment=env, max_episode_timesteps=500
-        # )
-
         agent = Agent.create(
             agent='ppo', environment=env, batch_size=10, learning_rate=1e-3
         )
@@ -62,9 +56,9 @@ class RL_Model:
         runner = Runner(
             agent=agent,
             environment=env
-            # max_episode_timesteps=500
         )
-
+    
+    def start(self):
         runner.run(num_episodes=200)
         runner.run(num_episodes=100, evaluation=True)
 
