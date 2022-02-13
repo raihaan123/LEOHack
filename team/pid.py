@@ -30,7 +30,7 @@ class PID:
         der_term     = np.dot(self.k_d, ((e - self.past_error) / delta_t))
         int_term     = np.dot(self.k_i, self.error_sum)
 
-        print(f"prop_term = {prop_term}\nder_term = {der_term}\nint_term = {int_term}\n")
+       # print(f"prop_term = {prop_term}\nder_term = {der_term}\nint_term = {int_term}\n")
 
         u            = prop_term + der_term + int_term
 
@@ -46,9 +46,13 @@ class PID:
     def antiwindup_measures(self):
 
         # If error changes sign, reset error integral
-        if (self.prev_error_sign is not None) and (self.prev_error_sign != self.error_sign):
-            self.error_sum = 0.0
-
-        # Limits absolute value of error sum to be below the set threshold
-        if (np.abs(self.error_sum) > self.max_error_integral):
-            self.error_sum = self.error_sign * self.max_error_integral
+        # if (self.prev_error_sign is not None) and (self.prev_error_sign != self.error_sign):
+        #     self.error_sum = 0.0
+        if np.all(self.prev_error_sign is not None): #and (self.prev_error_sign != self.error_sign):
+            self.error_sum[self.prev_error_sign != self.error_sign] = 0.0
+            #print(f"Reset_Error - {self.error_sum}")
+        # # Limits absolute value of error sum to be below the set threshold
+        # if (np.abs(self.error_sum) > self.max_error_integral):
+        #     self.error_sum = self.error_sign * self.max_error_integral
+        #if (np.abs(self.error_sum) > self.max_error_integral):
+        self.error_sum[np.abs(self.error_sum) > self.max_error_integral] = (self.error_sign * self.max_error_integral)[[np.abs(self.error_sum) > self.max_error_integral]]
