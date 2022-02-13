@@ -32,13 +32,6 @@ class SatelliteSystem(Environment):
         self.terminal = False
         self.reward = 0
 
-        # Get timedelta from elapsed time
-        self.elapsed_time = system_state.elapsedTime.ToTimedelta()
-        self.logger.info(f'Elapsed time: {self.elapsed_time}')
-
-        self.counter += 1
-        self.logger.info(f'Counter value: {self.counter}')
-
         # Create a thrust command message
         self.control = sat_msgs.ControlMessage()
 
@@ -63,8 +56,7 @@ class SatelliteSystem(Environment):
     def execute(self, state, actions):
         self.state = state
         self.action = actions
-        self.time += 1
-        self.fuel -= 0.1
+
         self.reward = 0.1 * self.time + 0.9 * self.fuel
         return self.state, self.terminal, self.reward
 
@@ -72,6 +64,8 @@ class SatelliteSystem(Environment):
 
 class RL_Model:
     def __init__(self, env):
+        self.env = env
+
         agent = Agent.create(
             agent='ppo', environment=env, batch_size=10, learning_rate=1e-3
         )
@@ -84,7 +78,6 @@ class RL_Model:
     def start(self):
         runner.run(num_episodes=200)
         runner.run(num_episodes=100, evaluation=True)
-
         runner.close()
 
 
@@ -112,8 +105,6 @@ class TeamController(SatControllerInterface):
         # Mission performance histories - N x 6 array of errors and N x 3 array of actions
         self.errors         = np.zeros((0,6))
         self.actions        = np.zeros((0,3))
-
-        self.has_docked     = False
 
         # Initialize RL environment wrapper, agent and model
         self.RL_satellite = Environment.create(
@@ -159,8 +150,7 @@ class TeamController(SatControllerInterface):
         self.counter += 1
         self.logger.info(f'Counter value: {self.counter}')
 
-        # Create a thrust command message
-        control = sat_msgs.ControlMessage()
+        control = self.RL_model.env.control
 
         # Dead satellite state
         dead_x          = dead_sat_state.pose.x
@@ -204,7 +194,7 @@ class TeamController(SatControllerInterface):
                          f' x_error = {x_error},         y_error = {y_error}'
                          f' vx_error = {vx_error},       vy_error = {vy_error}')
 
-        error = np.array([x_error, y_error, theta_error, vx_error, vy_error, omega_error])
+        self.RLstate    = error = np.array([x_error, y_error, theta_error, vx_error, vy_error, omega_error])
 
         # Controller switch
         if controller_choice == 'PID':
