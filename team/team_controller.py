@@ -1,4 +1,13 @@
 from sat_controller import SatControllerInterface, sat_msgs
+from datetime import datetime, timedelta
+import numpy as np
+
+# Additional imports
+from pid import PID
+from plotter import state_space
+import sys
+
+from RL import RL_Model, SatelliteSystem
 
 # Team code is written as an implementation of various methods
 # within the the generic SatControllerInterface class.
@@ -7,6 +16,8 @@ from sat_controller import SatControllerInterface, sat_msgs
 # Specifically, init, run, and reset
 
 class TeamController(SatControllerInterface):
+
+
     """ Team control code """
 
     def team_init(self):
@@ -23,36 +34,148 @@ class TeamController(SatControllerInterface):
 
         # Update team info
         team_info = sat_msgs.TeamInfo()
-        team_info.teamName = "Example"
+        team_info.teamName = "Group 16"
         team_info.teamID = 1111
+
+        # Mission performance histories - N x 6 array of errors and N x 3 array of actions
+        self.errors         = np.zeros((0,6))
+        self.actions        = np.zeros((0,3))
+
+        self.has_docked     = False
+
+        # Initialize RL model
+        self.RL_satellite = SatelliteSystem()
+        self.RL_model = RL_Model(self.RL_satellite)
+
+
+        
+        ### Solving --> U =  Kp * E + Ki * int_E + Kd * dE
+        ### State       X = [x, y, theta, v_x, v_y, theta_dot]
+        ### Control     U = [F_x, F_y, tau]
+
+        # Gain Dims = [6 states x 3 outputs]
+        K_P = np.array([[-3, 0, 0, -2, 0, 0],           [0, -3, 0, 0, -2, 0],               [0, 0, -0.2, 0, 0, -0.5]])
+        K_I = np.array([[0.001, 0, 0, 0.001, 0, 0],     [0, 0.001, 0, 0, 0.001, 0],         [0, 0, 0, 0, 0, 0]])
+        K_D = np.array([[0, 0, 0, 0, 0, 0],             [0, 0, 0, 0 ,0 ,0],                 [0, 0, 0, 0 ,0 ,0]])
+
+        pid_params =  {"p_gain": K_P, "i_gain": K_I, "d_gain": K_D,
+                                "antiwindup": False, "max_error_integral": 1.0}
+
+        self.controller = PID(pid_params)
+
+
+        self.dt = 0.05
 
         # Return team info
         return team_info
-
-    def team_run(self, system_state: sat_msgs.SystemState, satellite_state: sat_msgs.SatelliteState, dead_sat_state: sat_msgs.SatelliteState) -> sat_msgs.ControlMessage:
-        """ Takes in a system state, satellite state """
-
-        print(dead_sat_state)
+        
+    
+    def team_run(self, system_state, satellite_state, dead_sat_state):
+        """ Takes in a system state, satellite states """
 
         # Get timedelta from elapsed time
-        elapsed_time = system_state.elapsedTime.ToTimedelta()
-        self.logger.info(f'Elapsed time: {elapsed_time}')
+        self.elapsed_time = system_state.elapsedTime.ToTimedelta()
+        self.logger.info(f'Elapsed time: {self.elapsed_time}')
 
-        # Example of persistant data
         self.counter += 1
-
-        # Example of logging
         self.logger.info(f'Counter value: {self.counter}')
 
         # Create a thrust command message
-        control_message = sat_msgs.ControlMessage()
+        control = sat_msgs.ControlMessage()
 
-        # Set thrust command values, basic PD controller that drives the sat to [0, -1]
-        control_message.thrust.f_x = -2.0 * (satellite_state.pose.x - (0)) - 3.0 * satellite_state.twist.v_x
-        control_message.thrust.f_y = -2.0 * (satellite_state.pose.y - (-1)) - 3.0 * satellite_state.twist.v_y
+        # Dead satellite state
+        dead_x          = dead_sat_state.pose.x
+        dead_y          = dead_sat_state.pose.y        
+        dead_theta      = dead_sat_state.pose.theta
 
-        # Return control message
-        return control_message
+        dead_vx         = dead_sat_state.twist.v_x
+        dead_vy         = dead_sat_state.twist.v_y
+        dead_omega      = dead_sat_state.twist.omega
+
+        # Local offsets and tolerancing internally
+        x_tolerance     = 0.05
+        y_offset        = 0.25
+        y_tolerance     = 0.05
+        theta_tolerance = 0.1
+
+        vx_tolerance    = 0.001
+        vy_tolerance    = 0.001
+        omega_tolerance = 0.001
+
+        # Targets
+        x_target        = dead_x + y_offset * np.cos(dead_theta - np.pi / 2)
+        y_target        = dead_y + y_offset * np.sin(dead_theta - np.pi / 2)
+        theta_target    = dead_theta
+        
+        vx_target       = dead_vx
+        vy_target       = dead_vy
+        omega_target    = dead_omega
+
+        # Errors
+        x_error         = satellite_state.pose.x        - x_target
+        y_error         = satellite_state.pose.y        - y_target        
+        theta_error     = satellite_state.pose.theta % (np.pi) - theta_target % (np.pi)
+        
+        vx_error        = satellite_state.twist.v_x     - vx_target
+        vy_error        = satellite_state.twist.v_y     - vy_target
+        omega_error     = satellite_state.twist.omega   - omega_target
+
+        # Verbosey stuff
+        self.logger.info(f' omega_error = {omega_error}, theta_error = {theta_error}'
+                         f' x_error = {x_error},         y_error = {y_error}'
+                         f' vx_error = {vx_error},       vy_error = {vy_error}')
+
+        error = np.array([x_error, y_error, theta_error, vx_error, vy_error, omega_error])
+        control_actions = self.controller.step(e = error, delta_t = self.dt)
+
+        # More verbosey stuff!
+        print(f"control action = {control_actions}")
+        
+
+        # control.thrust.f_x = control_actions[0]
+        # control.thrust.f_y = control_actions[1]
+        # control.thrust.tau = control_actions[2]
+        [control.thrust.f_x, control.thrust.f_y, control.thrust.tau] = control_actions
+        
+        # Flags
+        pose_check      = False
+        theta_check     = False
+
+        # Check position tolerance
+        if abs(x_error) < x_tolerance and abs(y_error) < y_tolerance:           
+            pose_check = True
+        else:                                                                   
+            pose_check = False
+
+        # Check angular tolerance
+        if abs(theta_error) < theta_tolerance and abs(omega_error) < omega_tolerance:     
+            theta_check = True
+        else:                                                                   
+            theta_check = False
+
+        # Add error vector as a row to the self.errors matrix
+        self.errors = np.vstack((self.errors, error))
+        # Same with actions
+        self.actions = np.vstack((self.actions, control_actions))
+
+        # Final post-docking processing
+        if pose_check and theta_check:      
+            print(pose_check, theta_check)
+            self.has_docked = True
+
+            # Matplotlib to plot vy errors vs x errors - both located in self.errors
+            state_space(self.errors)
+
+
+
+        self.prev_time = self.elapsed_time
+
+        return control
+    
+
+    
+
+
 
     def team_reset(self) -> None:
         # Run any reset code

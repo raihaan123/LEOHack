@@ -19,10 +19,10 @@ parser.add_argument(
 args = parser.parse_args()
 
 # Create simulator object
-sim = Sim(args.loglevel, 3)
+sim = Sim(args.loglevel, 4)
 sim.start_meshcat()
 
-input("Hit enter to continue running")
+# input("Hit enter to continue running")
 
 sim.start()
 
