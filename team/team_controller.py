@@ -43,8 +43,8 @@ class SatelliteSystem(Environment):
     def close(self):
         super().close()
 
-    def reset(self, init_state):
-        self.state = init_state
+    def reset(self):
+        self.state = np.zeros((6,))
         self.time = 0
         self.fuel = 0
         self.reward = 0
@@ -52,11 +52,11 @@ class SatelliteSystem(Environment):
 
 
     # Defining the reward function
-    def rewarder(self, errors, fuel):
+    def execute(self, errors):
 
         # Reward function - norm of the error
         reward = np.linalg.norm(errors)
-        return reward
+        return self.state,False,reward
 
 
 class RL_Model:
@@ -114,6 +114,8 @@ class TeamController(SatControllerInterface):
 
         self.RL_model = RL_Model(self.RL_satellite)
         self.total_reward = 0
+
+        self.state = self.RL_model.env.reset()
 
 
         # ====================== PID Controller ===========================
@@ -228,9 +230,11 @@ class TeamController(SatControllerInterface):
             actions = agent.act(states=errors, independent=True, deterministic=True)
 
             # Janky way to calculate reward
-            reward = environment.rewarder(self.compute_errors(), satellite_state.fuel)
+            # print("!!!!!!!!!!!!!!!!!", self.compute_errors(), satellite_state.fuel)
+            a,b,c = environment.execute(actions)
+            reward = -np.linalg.norm(self.compute_errors())
 
-            # Update the agent
+            # Update the agentname
             agent.observe(terminal=False, reward=reward)
 
             # Aggregate the rewards
