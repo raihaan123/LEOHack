@@ -1,18 +1,19 @@
 ## Controller choice --> 'PID', 'RL'
 controller_choice = 'PID'
 
-
 from sat_controller import SatControllerInterface, sat_msgs
 from datetime import datetime, timedelta
 import numpy as np
 
-# Additional imports
+# Additional imports - PID solution
 from pid import PID
 from plotter import state_space
 import sys
 
-from tensorforce import Environment
-from RL import RL_Model
+# Additional imports - RL solution
+from tensorforce.environments import Environment
+from tensorforce.agents import Agent
+from tensorforce.execution import Runner
 
 # Team code is written as an implementation of various methods
 # within the the generic SatControllerInterface class.
@@ -20,6 +21,7 @@ from RL import RL_Model
 
 # Specifically, init, run, and reset
 
+# RL Environment Wrapper - interacts with the Sim object
 class SatelliteSystem(Environment):
     def __init__(self):
         super().__init__()
@@ -30,9 +32,21 @@ class SatelliteSystem(Environment):
         self.terminal = False
         self.reward = 0
 
+        # Get timedelta from elapsed time
+        self.elapsed_time = system_state.elapsedTime.ToTimedelta()
+        self.logger.info(f'Elapsed time: {self.elapsed_time}')
+
+        self.counter += 1
+        self.logger.info(f'Counter value: {self.counter}')
+
+        # Create a thrust command message
+        self.control = sat_msgs.ControlMessage()
+
+    # State space definition
     def states(self):
         return dict(type='float', shape=(6,))
 
+    # Action space definition
     def actions(self):
         return dict(type='float', shape=3)
 
@@ -55,8 +69,27 @@ class SatelliteSystem(Environment):
         return self.state, self.terminal, self.reward
 
 
-class TeamController(SatControllerInterface):
 
+class RL_Model:
+    def __init__(self, env):
+        agent = Agent.create(
+            agent='ppo', environment=env, batch_size=10, learning_rate=1e-3
+        )
+
+        runner = Runner(
+            agent=agent,
+            environment=env
+        )
+    
+    def start(self):
+        runner.run(num_episodes=200)
+        runner.run(num_episodes=100, evaluation=True)
+
+        runner.close()
+
+
+
+class TeamController(SatControllerInterface):
     """ Team control code """
 
     def team_init(self):
@@ -92,7 +125,10 @@ class TeamController(SatControllerInterface):
         self.RL_model = RL_Model(self.RL_satellite)
 
 
-        
+        # =================================================================
+        # ====================== PID Controller ===========================
+        # =================================================================
+
         ### Solving --> U =  Kp * E + Ki * int_E + Kd * dE
         ### State       X = [x, y, theta, v_x, v_y, theta_dot]
         ### Control     U = [F_x, F_y, tau]
@@ -106,13 +142,13 @@ class TeamController(SatControllerInterface):
                                 "antiwindup": False, "max_error_integral": 1.0}
 
         self.controller = PID(pid_params)
-
         self.dt = 0.05
 
         # Return team info
         return team_info
         
     
+
     def team_run(self, system_state, satellite_state, dead_sat_state):
         """ Takes in a system state, satellite states """
 
@@ -170,21 +206,18 @@ class TeamController(SatControllerInterface):
 
         error = np.array([x_error, y_error, theta_error, vx_error, vy_error, omega_error])
 
-        # If using PID, run this
+        # Controller switch
         if controller_choice == 'PID':
             control_actions = self.controller.step(e = error, delta_t = self.dt)
 
         else:
             # If using RL, run this
-            control_actions = self.RL_model.step(error, self.elapsed_time)
+            control_actions = self.RL_model.run(error)
 
         # More verbosey stuff!
         print(f"control action = {control_actions}")
-        
 
-        # control.thrust.f_x = control_actions[0]
-        # control.thrust.f_y = control_actions[1]
-        # control.thrust.tau = control_actions[2]
+        # Applying the control actions
         [control.thrust.f_x, control.thrust.f_y, control.thrust.tau] = control_actions
         
         # Flags

@@ -11,7 +11,7 @@ import numpy as np
 ## State vector - [x, y, vx, vy, theta, omega]
 ## Action vector - [F_x, F_y, tau]
 
-## Reward function - 0.1 * Time + 0.9 * Fuel Consumption
+## Reward function - 0.1 * Time elapsed + 0.9 * Fuel Consumption
 
 
 # RL Environment Wrapper
