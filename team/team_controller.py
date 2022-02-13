@@ -1,5 +1,9 @@
-## Controller choice --> 'PID', 'RL'
-controller_choice = 'PID'
+# =================================================================
+# Controller choice --> 'PID', 'RL'
+controller_choice   = 'PID'
+training            = True
+agent_path          = 'agent_model'
+# =================================================================
 
 from sat_controller import SatControllerInterface, sat_msgs
 from datetime import datetime, timedelta
@@ -15,11 +19,6 @@ from tensorforce.environments import Environment
 from tensorforce.agents import Agent
 from tensorforce.execution import Runner
 
-# Team code is written as an implementation of various methods
-# within the the generic SatControllerInterface class.
-# If you would like to see how this class works, look in sat_control/sat_controller
-
-# Specifically, init, run, and reset
 
 # RL Environment Wrapper - interacts with the Sim object
 class SatelliteSystem(Environment):
@@ -61,20 +60,26 @@ class SatelliteSystem(Environment):
         return self.state, self.terminal, self.reward
 
 
-
 class RL_Model:
     def __init__(self, env):
         self.env = env
 
-        agent = Agent.create(
+        agent = self.agent = Agent.create(
             agent='ppo', environment=env, batch_size=10, learning_rate=1e-3
         )
 
-        runner = Runner(
+        try:
+            agent.restore_model(directory=agent_path)
+        except:
+            print('No previous model found!')
+
+
+        self.runner = Runner(
             agent=agent,
             environment=env
         )
     
+    # Probably not gonna use standard runner
     def start(self):
         runner.run(num_episodes=200)
         runner.run(num_episodes=100, evaluation=True)
@@ -106,17 +111,19 @@ class TeamController(SatControllerInterface):
         self.errors         = np.zeros((0,6))
         self.actions        = np.zeros((0,3))
 
+
+        # ====================== RL Controller ============================
+        # =================================================================
+
         # Initialize RL environment wrapper, agent and model
         self.RL_satellite = Environment.create(
             environment=SatelliteSystem,
             max_episode_timesteps=500
         )
 
-
         self.RL_model = RL_Model(self.RL_satellite)
 
 
-        # =================================================================
         # ====================== PID Controller ===========================
         # =================================================================
 
@@ -132,13 +139,12 @@ class TeamController(SatControllerInterface):
         pid_params =  {"p_gain": K_P, "i_gain": K_I, "d_gain": K_D,
                                 "antiwindup": False, "max_error_integral": 1.0}
 
-        self.controller = PID(pid_params)
+        self.PID_controller = PID(pid_params)
         self.dt = 0.05
 
         # Return team info
         return team_info
         
-    
 
     def team_run(self, system_state, satellite_state, dead_sat_state):
         """ Takes in a system state, satellite states """
@@ -150,6 +156,7 @@ class TeamController(SatControllerInterface):
         self.counter += 1
         self.logger.info(f'Counter value: {self.counter}')
 
+        # Access controller api through RL agent lol
         control = self.RL_model.env.control
 
         # Dead satellite state
@@ -194,18 +201,39 @@ class TeamController(SatControllerInterface):
                          f' x_error = {x_error},         y_error = {y_error}'
                          f' vx_error = {vx_error},       vy_error = {vy_error}')
 
-        self.RLstate    = error = np.array([x_error, y_error, theta_error, vx_error, vy_error, omega_error])
+        errors = np.array([x_error, y_error, theta_error, vx_error, vy_error, omega_error])
 
         # Controller switch
         if controller_choice == 'PID':
-            control_actions = self.controller.step(e = error, delta_t = self.dt)
+            control_actions = self.PID_controller.step(e = errors, delta_t = self.dt)
 
-        else:
+        elif controller_choice == 'RL':
             # If using RL, run this
-            control_actions = self.RL_model.run(error)
+            self.RL_state = errors
+
+            # Agent identifies action from state
+            actions = agent.act(states=errors)
+
+            # Updated state and reward returned by environment
+            states, terminal, reward = environment.execute(actions=actions)
+
+            # Update the agent
+            agent.observe(terminal=terminal, reward=reward)
+
+            # Save model every 1000 steps
+            if self.counter % 1000 == 0:
+                agent.save_model(agent_weights)
+
+
+
+
+
+
+
+
 
         # More verbosey stuff!
-        print(f"control action = {control_actions}")
+        print(f"Control action = {control_actions}")
 
         # Applying the control actions
         [control.thrust.f_x, control.thrust.f_y, control.thrust.tau] = control_actions
@@ -227,13 +255,8 @@ class TeamController(SatControllerInterface):
             theta_check = False
 
 
-        self.errors = np.vstack((self.errors, error))
+        self.errors = np.vstack((self.errors, errors))
         self.actions = np.vstack((self.actions, control_actions))
-
-        # # Final post-docking processing
-        # if pose_check and theta_check:      
-        #     print(pose_check, theta_check)
-        #     self.has_docked = True
 
         if self.counter % 100 == 0:
             # Matplotlib to plot vy errors vs x errors - both located in self.errors
